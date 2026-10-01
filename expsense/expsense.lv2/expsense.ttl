@@ -1,0 +1,207 @@
+@prefix atom:  <http://lv2plug.in/ns/ext/atom#> .
+@prefix doap:  <http://usefulinc.com/ns/doap#> .
+@prefix lv2:   <http://lv2plug.in/ns/lv2core#> .
+@prefix midi:  <http://lv2plug.in/ns/ext/midi#> .
+@prefix mod:   <http://moddevices.com/ns/mod#> .
+@prefix pprop: <http://lv2plug.in/ns/ext/port-props#> .
+@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix state: <http://lv2plug.in/ns/ext/state#> .
+@prefix units: <http://lv2plug.in/ns/extensions/units#> .
+@prefix urid:  <http://lv2plug.in/ns/ext/urid#> .
+
+<urn:alabs:expsense>
+    a lv2:Plugin, lv2:UtilityPlugin ;
+    doap:name "ExpSense" ;
+    mod:brand "aLabs" ;
+    mod:label "ExpSense" ;
+    rdfs:comment "Reads a passive expression pedal through audio I/O, with no extra electronics. Wire the pedal between Out 2 (Ring) and In 2 (Tip) with an insert cable, place the plugin at the end of the chain, and press Calibrate. The pedal position is available as CV, MIDI CC and as a built-in stereo volume." ;
+    lv2:minorVersion 0 ;
+    lv2:microVersion 1 ;
+    lv2:requiredFeature urid:map ;
+    lv2:optionalFeature lv2:hardRTCapable ;
+    lv2:extensionData state:interface ;
+
+    lv2:port [
+        a lv2:AudioPort, lv2:InputPort ;
+        lv2:index 0 ; lv2:symbol "in_l" ; lv2:name "In L" ;
+        rdfs:comment "Left input: the processed signal from the effect chain." ;
+    ] , [
+        a lv2:AudioPort, lv2:InputPort ;
+        lv2:index 1 ; lv2:symbol "in_r" ; lv2:name "In R" ;
+        rdfs:comment "Right input: the processed signal from the effect chain." ;
+    ] , [
+        a lv2:AudioPort, lv2:OutputPort ;
+        lv2:index 2 ; lv2:symbol "out_l" ; lv2:name "Out L" ;
+        rdfs:comment "Left output (Out 1). Volume is applied here when Volume is on." ;
+    ] , [
+        a lv2:AudioPort, lv2:OutputPort ;
+        lv2:index 3 ; lv2:symbol "out_r" ; lv2:name "Out R (amp + pedal)" ;
+        rdfs:comment "Right output (Out 2): feeds the right amp and the pedal (Ring). The pilot tone is added here only." ;
+    ] , [
+        a lv2:AudioPort, lv2:InputPort ;
+        lv2:index 4 ; lv2:symbol "sense" ; lv2:name "Sense (pedal wiper)" ;
+        rdfs:comment "Connect to In 2, which receives the pedal wiper (Tip)." ;
+    ] , [
+        a lv2:OutputPort, lv2:CVPort, mod:CVPort ;
+        lv2:index 5 ; lv2:symbol "cv" ; lv2:name "CV" ;
+        rdfs:comment "Pedal position as CV, 0 to 10 (0 = heel, 10 = toe)." ;
+        lv2:minimum 0.0 ; lv2:maximum 10.0 ;
+    ] , [
+        a lv2:OutputPort, atom:AtomPort ;
+        atom:bufferType atom:Sequence ;
+        atom:supports midi:MidiEvent ;
+        lv2:index 6 ; lv2:symbol "midi_out" ; lv2:name "MIDI Out" ;
+        rdfs:comment "Pedal position as MIDI CC, sent only when it changes." ;
+    ] , [
+        a lv2:InputPort, lv2:ControlPort ;
+        lv2:index 7 ; lv2:symbol "mode" ; lv2:name "Sense Mode" ;
+        rdfs:comment "Reference used to read the pedal. Hybrid: the music, plus a pilot tone only when needed. Tone only: pilot tone always on. Program only: no tone, value held in silence (do not use with Volume)." ;
+        lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 2 ;
+        lv2:portProperty lv2:integer, lv2:enumeration ;
+        lv2:scalePoint [ rdfs:label "Hybrid" ; rdf:value 0 ] ,
+                       [ rdfs:label "Tone only" ; rdf:value 1 ] ,
+                       [ rdfs:label "Program only" ; rdf:value 2 ] ;
+    ] , [
+        a lv2:InputPort, lv2:ControlPort ;
+        lv2:index 8 ; lv2:symbol "tone_freq" ; lv2:name "Tone Freq" ;
+        rdfs:comment "Pilot tone frequency. Keep it above hearing and within what your amp or PA reproduces cleanly." ;
+        lv2:default 19000.0 ; lv2:minimum 12000.0 ; lv2:maximum 21000.0 ;
+        units:unit units:hz ;
+    ] , [
+        a lv2:InputPort, lv2:ControlPort ;
+        lv2:index 9 ; lv2:symbol "tone_level" ; lv2:name "Tone Level" ;
+        rdfs:comment "Pilot tone level. Lower is less audible but gives a noisier reading." ;
+        lv2:default -50.0 ; lv2:minimum -70.0 ; lv2:maximum -20.0 ;
+        units:unit units:db ;
+    ] , [
+        a lv2:InputPort, lv2:ControlPort ;
+        lv2:index 10 ; lv2:symbol "smooth" ; lv2:name "Smoothing" ;
+        rdfs:comment "Smoothing of the pedal value. Lower is faster (wah), higher is smoother (volume)." ;
+        lv2:default 3.0 ; lv2:minimum 0.5 ; lv2:maximum 100.0 ;
+        units:unit units:ms ;
+        lv2:portProperty pprop:logarithmic ;
+    ] , [
+        a lv2:InputPort, lv2:ControlPort ;
+        lv2:index 11 ; lv2:symbol "curve" ; lv2:name "Curve" ;
+        rdfs:comment "Response curve exponent applied to the pedal value (1 = linear). Affects CV, MIDI and Volume." ;
+        lv2:default 1.0 ; lv2:minimum 0.25 ; lv2:maximum 4.0 ;
+        lv2:portProperty pprop:logarithmic ;
+    ] , [
+        a lv2:InputPort, lv2:ControlPort ;
+        lv2:index 12 ; lv2:symbol "invert" ; lv2:name "Invert" ;
+        rdfs:comment "Reverse the pedal direction (toe = 0, heel = 1). The calibration already learns the right direction." ;
+        lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 1 ;
+        lv2:portProperty lv2:toggled ;
+    ] , [
+        a lv2:InputPort, lv2:ControlPort ;
+        lv2:index 13 ; lv2:symbol "vol_on" ; lv2:name "Volume" ;
+        rdfs:comment "Use the pedal as a stereo volume control on the outputs." ;
+        lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 1 ;
+        lv2:portProperty lv2:toggled ;
+    ] , [
+        a lv2:InputPort, lv2:ControlPort ;
+        lv2:index 14 ; lv2:symbol "vol_law" ; lv2:name "Volume Taper" ;
+        rdfs:comment "Volume response: Logarithmic (audio taper, silence at heel) or Linear." ;
+        lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 1 ;
+        lv2:portProperty lv2:integer, lv2:enumeration ;
+        lv2:scalePoint [ rdfs:label "Logarithmic" ; rdf:value 0 ] ,
+                       [ rdfs:label "Linear" ; rdf:value 1 ] ;
+    ] , [
+        a lv2:InputPort, lv2:ControlPort ;
+        lv2:index 15 ; lv2:symbol "calibrate" ; lv2:name "Calibrate" ;
+        rdfs:comment "Press with the pedal heel-down, then follow the status: move to toe and hold, then back to heel. Checks the wiring, measures the latency and learns the pedal range. Press again to abort." ;
+        lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 1 ;
+        lv2:portProperty lv2:toggled, pprop:trigger ;
+    ] , [
+        a lv2:InputPort, lv2:ControlPort ;
+        lv2:index 16 ; lv2:symbol "midi_ch" ; lv2:name "MIDI Channel" ;
+        rdfs:comment "MIDI channel for the CC output." ;
+        lv2:default 1 ; lv2:minimum 1 ; lv2:maximum 16 ;
+        lv2:portProperty lv2:integer ;
+    ] , [
+        a lv2:InputPort, lv2:ControlPort ;
+        lv2:index 17 ; lv2:symbol "midi_cc" ; lv2:name "MIDI CC" ;
+        rdfs:comment "MIDI CC number (11 = Expression)." ;
+        lv2:default 11 ; lv2:minimum 0 ; lv2:maximum 119 ;
+        lv2:portProperty lv2:integer ;
+    ] , [
+        a lv2:InputPort, lv2:ControlPort ;
+        lv2:index 18 ; lv2:symbol "midi_14bit" ; lv2:name "MIDI 14-bit" ;
+        rdfs:comment "Send a 14-bit CC (MSB on CC, LSB on CC+32). Only for CC numbers below 32." ;
+        lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 1 ;
+        lv2:portProperty lv2:toggled ;
+    ] , [
+        a lv2:OutputPort, lv2:ControlPort ;
+        lv2:index 19 ; lv2:symbol "value" ; lv2:name "Value" ;
+        rdfs:comment "Current pedal position, 0 (heel) to 1 (toe)." ;
+        lv2:default 0.0 ; lv2:minimum 0.0 ; lv2:maximum 1.0 ;
+    ] , [
+        a lv2:OutputPort, lv2:ControlPort ;
+        lv2:index 20 ; lv2:symbol "raw" ; lv2:name "Raw Gain" ;
+        rdfs:comment "Raw divider ratio returned by the pedal, before calibration mapping." ;
+        lv2:default 0.0 ; lv2:minimum 0.0 ; lv2:maximum 2.0 ;
+    ] , [
+        a lv2:OutputPort, lv2:ControlPort ;
+        lv2:index 21 ; lv2:symbol "tone_active" ; lv2:name "Tone Active" ;
+        rdfs:comment "1 while the pilot tone is on." ;
+        lv2:default 0.0 ; lv2:minimum 0.0 ; lv2:maximum 1.0 ;
+    ] , [
+        a lv2:OutputPort, lv2:ControlPort ;
+        lv2:index 22 ; lv2:symbol "status" ; lv2:name "Status" ;
+        rdfs:comment "Plugin status, including the calibration steps." ;
+        lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 6 ;
+        lv2:portProperty lv2:integer, lv2:enumeration ;
+        lv2:scalePoint [ rdfs:label "Uncalibrated" ; rdf:value 0 ] ,
+                       [ rdfs:label "Running" ; rdf:value 1 ] ,
+                       [ rdfs:label "Hold" ; rdf:value 2 ] ,
+                       [ rdfs:label "Cal: heel down" ; rdf:value 3 ] ,
+                       [ rdfs:label "Cal: move to toe and hold" ; rdf:value 4 ] ,
+                       [ rdfs:label "Cal: hold at toe" ; rdf:value 5 ] ,
+                       [ rdfs:label "Cal: back to heel" ; rdf:value 6 ] ;
+    ] , [
+        a lv2:OutputPort, lv2:ControlPort ;
+        lv2:index 23 ; lv2:symbol "latency" ; lv2:name "Loop Latency" ;
+        rdfs:comment "Measured round-trip latency Out 2 to In 2, in samples." ;
+        lv2:default 0.0 ; lv2:minimum 0.0 ; lv2:maximum 4096.0 ;
+        units:unit units:frame ;
+    ] , [
+        a lv2:OutputPort, lv2:ControlPort ;
+        lv2:index 24 ; lv2:symbol "cal_lo" ; lv2:name "Cal Min" ;
+        rdfs:comment "Calibrated raw value at heel." ;
+        lv2:default 0.0 ; lv2:minimum 0.0 ; lv2:maximum 2.0 ;
+    ] , [
+        a lv2:OutputPort, lv2:ControlPort ;
+        lv2:index 25 ; lv2:symbol "cal_hi" ; lv2:name "Cal Max" ;
+        rdfs:comment "Calibrated raw value at toe." ;
+        lv2:default 1.0 ; lv2:minimum 0.0 ; lv2:maximum 2.0 ;
+    ] , [
+        a lv2:OutputPort, lv2:ControlPort ;
+        lv2:index 26 ; lv2:symbol "ref_db" ; lv2:name "Reference Level" ;
+        rdfs:comment "Energy of the reference signal used for the reading. Very low values mean an unreliable reading." ;
+        lv2:default -120.0 ; lv2:minimum -120.0 ; lv2:maximum 0.0 ;
+        units:unit units:db ;
+    ] , [
+        a lv2:OutputPort, lv2:ControlPort ;
+        lv2:index 27 ; lv2:symbol "vol_gain" ; lv2:name "Volume Gain" ;
+        rdfs:comment "Linear gain currently applied to the outputs." ;
+        lv2:default 1.0 ; lv2:minimum 0.0 ; lv2:maximum 1.0 ;
+        units:unit units:coef ;
+    ] , [
+        a lv2:OutputPort, lv2:ControlPort ;
+        lv2:index 28 ; lv2:symbol "result" ; lv2:name "Calibration Result" ;
+        rdfs:comment "Result of the last calibration." ;
+        lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 10 ;
+        lv2:portProperty lv2:integer, lv2:enumeration ;
+        lv2:scalePoint [ rdfs:label "None" ; rdf:value 0 ] ,
+                       [ rdfs:label "Running" ; rdf:value 1 ] ,
+                       [ rdfs:label "OK" ; rdf:value 2 ] ,
+                       [ rdfs:label "OK, In 2 level low" ; rdf:value 3 ] ,
+                       [ rdfs:label "Swap Send/Return (or pedal not moved)" ; rdf:value 4 ] ,
+                       [ rdfs:label "No signal" ; rdf:value 5 ] ,
+                       [ rdfs:label "In 2 clipping" ; rdf:value 6 ] ,
+                       [ rdfs:label "Latency not measurable" ; rdf:value 7 ] ,
+                       [ rdfs:label "Aborted" ; rdf:value 8 ] ,
+                       [ rdfs:label "Toe not held" ; rdf:value 9 ] ,
+                       [ rdfs:label "OK, check wiring" ; rdf:value 10 ] ;
+    ] .

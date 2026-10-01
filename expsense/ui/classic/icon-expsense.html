@@ -1,0 +1,68 @@
+<div class="mod-pedal expsense{{{cns}}}">
+    <div mod-role="drag-handle" class="mod-drag-handle"></div>
+
+    <div class="es-head">
+        <span class="es-brand">aLabs</span>
+        <span class="es-name">ExpSense</span>
+    </div>
+
+    <div class="es-display" title="Status, pilot tone indicator and pedal position">
+        <div class="es-row"><span class="es-k">Status</span><span class="es-v es-status">—</span></div>
+        <div class="es-row"><span class="es-k">Tone</span><span class="es-tone"></span></div>
+        <div class="es-bar"><div class="es-bar-fill"></div><span class="es-bar-text">0.00</span></div>
+    </div>
+
+    <div class="es-selects">
+        <div class="es-sel" mod-role="input-control-port" mod-port-symbol="mode" title="Reference used to read the pedal. Hybrid: the music, plus a pilot tone only when needed. Tone only: pilot tone always on. Program only: no tone, value held in silence (do not use with Volume)." mod-widget="custom-select">
+            <span class="es-label">Sense Mode</span>
+            <div class="es-sel-value" mod-role="input-control-value" mod-port-symbol="mode"></div>
+            <div class="mod-enumerated-list">
+                <div mod-role="enumeration-option" mod-port-value="0">Hybrid</div>
+                <div mod-role="enumeration-option" mod-port-value="1">Tone only</div>
+                <div mod-role="enumeration-option" mod-port-value="2">Program only</div>
+            </div>
+        </div>
+        <div class="es-sel" mod-role="input-control-port" mod-port-symbol="vol_law" title="Volume response: Logarithmic (audio taper, silence at heel) or Linear." mod-widget="custom-select">
+            <span class="es-label">Volume Taper</span>
+            <div class="es-sel-value" mod-role="input-control-value" mod-port-symbol="vol_law"></div>
+            <div class="mod-enumerated-list">
+                <div mod-role="enumeration-option" mod-port-value="0">Logarithmic</div>
+                <div mod-role="enumeration-option" mod-port-value="1">Linear</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="es-switches">
+        <div class="es-sw" mod-role="input-control-port" mod-port-symbol="vol_on" title="Use the pedal as a stereo volume control on the outputs." mod-widget="switch">Volume</div>
+        <div class="es-sw" mod-role="input-control-port" mod-port-symbol="invert" title="Reverse the pedal direction (toe = 0, heel = 1). The calibration already learns the right direction." mod-widget="switch">Invert</div>
+        <div class="es-sw" mod-role="input-control-port" mod-port-symbol="calibrate" title="Press with the pedal heel-down, then follow the status: move to toe and hold, then back to heel. Checks the wiring, measures the latency and learns the pedal range. Press again to abort." mod-widget="switch">Calibrate</div>
+    </div>
+
+    <div class="es-bypass-light" mod-role="bypass-light"></div>
+    <div class="es-footswitch" mod-role="bypass"></div>
+
+    <div class="mod-pedal-input">
+        {{#effect.ports.audio.input}}
+        <div class="mod-input mod-input-disconnected" title="{{name}}" mod-role="input-audio-port" mod-port-symbol="{{symbol}}">
+            <div class="mod-pedal-input-image"></div>
+        </div>
+        {{/effect.ports.audio.input}}
+    </div>
+    <div class="mod-pedal-output">
+        {{#effect.ports.audio.output}}
+        <div class="mod-output mod-output-disconnected" title="{{name}}" mod-role="output-audio-port" mod-port-symbol="{{symbol}}">
+            <div class="mod-pedal-output-image"></div>
+        </div>
+        {{/effect.ports.audio.output}}
+        {{#effect.ports.midi.output}}
+        <div class="mod-output mod-output-disconnected" title="{{name}}" mod-role="output-midi-port" mod-port-symbol="{{symbol}}">
+            <div class="mod-pedal-output-image"></div>
+        </div>
+        {{/effect.ports.midi.output}}
+        {{#effect.ports.cv.output}}
+        <div class="mod-output mod-output-disconnected" title="{{name}}" mod-role="output-cv-port" mod-port-symbol="{{symbol}}">
+            <div class="mod-pedal-output-image"></div>
+        </div>
+        {{/effect.ports.cv.output}}
+    </div>
+</div>

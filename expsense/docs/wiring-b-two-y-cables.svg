@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="660" viewBox="0 0 900 660">
+<defs><marker id="aO" viewBox="0 0 10 10" refX="10" refY="5" markerUnits="userSpaceOnUse" markerWidth="14" markerHeight="14" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#e8771e"/></marker><marker id="aB" viewBox="0 0 10 10" refX="10" refY="5" markerUnits="userSpaceOnUse" markerWidth="14" markerHeight="14" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1f78c1"/></marker><marker id="aG" viewBox="0 0 10 10" refX="10" refY="5" markerUnits="userSpaceOnUse" markerWidth="14" markerHeight="14" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b7280"/></marker></defs>
+<style>
+  text { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; fill: #1f2328; }
+  .title { font-size: 20px; font-weight: 700; }
+  .sub { font-size: 13px; fill: #4b5563; }
+  .lbl { font-size: 13px; font-weight: 600; }
+  .small { font-size: 11.5px; fill: #4b5563; }
+  .cablename { font-size: 15px; font-weight: 800; }
+  .jack { font-size: 12px; font-weight: 700; fill: #f3f4f6; letter-spacing: 0.5px; }
+  .dev { font-size: 13px; font-weight: 700; }
+  .cable { fill: none; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+</style>
+<rect width="900" height="660" fill="#ffffff"/>
+<text class="title" x="40" y="44">B · Two Y cables (stereo)</text>
+<text class="sub" x="40" y="66">A Y splitter keeps Out 2 available for the right amp, while also feeding the pedal.</text>
+<rect x="60" y="96" width="130" height="54" rx="8" fill="#f9fafb" stroke="#1f2328" stroke-width="1.5"/><text class="lbl" x="125.0" y="128.0" text-anchor="middle">Guitar</text>
+<rect x="710" y="96" width="130" height="54" rx="8" fill="#f9fafb" stroke="#1f2328" stroke-width="1.5"/><text class="lbl" x="775.0" y="123.0" text-anchor="middle">Amplifier L</text><text class="small" x="775.0" y="140.0" text-anchor="middle">or mixer L</text>
+<rect x="250" y="180" width="410" height="100" rx="10" fill="#2b2f36" stroke="#111" stroke-width="1.5"/><circle cx="300" cy="230.0" r="13" fill="#111" stroke="#9ca3af" stroke-width="2"/><circle cx="300" cy="230.0" r="5" fill="#374151"/><text class="jack" x="300" y="263.0" text-anchor="middle">IN 1</text><rect x="293" y="191.0" width="14" height="26" rx="3" fill="#d1d5db" stroke="#4b5563" stroke-width="1.2"/><circle cx="390" cy="230.0" r="13" fill="#111" stroke="#9ca3af" stroke-width="2"/><circle cx="390" cy="230.0" r="5" fill="#374151"/><text class="jack" x="390" y="208.0" text-anchor="middle">IN 2</text><rect x="383" y="243.0" width="14" height="26" rx="3" fill="#d1d5db" stroke="#4b5563" stroke-width="1.2"/><circle cx="510" cy="230.0" r="13" fill="#111" stroke="#9ca3af" stroke-width="2"/><circle cx="510" cy="230.0" r="5" fill="#374151"/><text class="jack" x="510" y="263.0" text-anchor="middle">OUT 1</text><rect x="503" y="191.0" width="14" height="26" rx="3" fill="#d1d5db" stroke="#4b5563" stroke-width="1.2"/><circle cx="600" cy="230.0" r="13" fill="#111" stroke="#9ca3af" stroke-width="2"/><circle cx="600" cy="230.0" r="5" fill="#374151"/><text class="jack" x="600" y="208.0" text-anchor="middle">OUT 2</text><rect x="593" y="243.0" width="14" height="26" rx="3" fill="#d1d5db" stroke="#4b5563" stroke-width="1.2"/><path class="cable" d="M190,123 H300 V191.0" stroke="#6b7280" marker-end="url(#aG)"/><path class="cable" d="M510,191.0 V123 H702" stroke="#6b7280" marker-end="url(#aG)"/><text class="dev" x="674" y="224">MOD Dwarf</text><text class="small" x="674" y="242">rear panel</text>
+<path class="cable" d="M600,269.0 V316" stroke="#e8771e"/>
+<rect x="580" y="316" width="40" height="28" rx="6" fill="#f3f4f6" stroke="#1f2328" stroke-width="1.5"/>
+<text class="cablename" x="632" y="308">Y splitter · TS → 2 × TS</text>
+<text class="small" x="632" y="324">mono, one jack to two</text>
+<path class="cable" d="M620,336 H700 Q775,336 775,386 V406" stroke="#6b7280" marker-end="url(#aG)"/>
+<rect x="710" y="414" width="130" height="54" rx="8" fill="#f9fafb" stroke="#1f2328" stroke-width="1.5"/><text class="lbl" x="775.0" y="441.0" text-anchor="middle">Amplifier R</text><text class="small" x="775.0" y="458.0" text-anchor="middle">or mixer R</text>
+<path class="cable" d="M600,344 V400 Q600,470 520,470" stroke="#e8771e"/>
+<path d="M600,364 v10" stroke="#e8771e" stroke-width="4" marker-end="url(#aO)"/>
+<path class="cable" d="M480,470 Q390,470 390,400 V270.0" stroke="#1f78c1" marker-end="url(#aB)"/>
+<text class="lbl" x="612" y="402" style="fill:#e8771e">Ring · R · Return</text><text class="small" x="612" y="419">from the Y splitter</text><text class="lbl" x="378" y="402" text-anchor="end" style="fill:#1f78c1">Tip · L · Send</text><text class="small" x="378" y="419" text-anchor="end">to IN 2</text>
+<circle cx="500" cy="470" r="11" fill="#1f2328"/>
+<path class="cable" d="M500,481 V510" stroke="#1f2328"/>
+<rect x="491" y="510" width="18" height="24" rx="3" fill="#d1d5db" stroke="#4b5563" stroke-width="1.2"/>
+<text class="cablename" x="522" y="494">Y cable · TRS ⟷ 2 × TS</text>
+<text class="small" x="522" y="511">insert cable, or TRS female adapter + stereo cable</text>
+<rect x="405" y="568" width="190" height="22" rx="6" fill="#4b5563" stroke="#1f2328" stroke-width="1.5"/><path d="M412,568 L580,532 L590,540 L420,570 z" fill="#9ca3af" stroke="#1f2328" stroke-width="1.5"/><circle cx="430" cy="570" r="5" fill="#1f2328"/><text class="lbl" x="500" y="616" text-anchor="middle">Passive expression pedal</text><text class="small" x="500" y="633" text-anchor="middle">TRS jack · Tip = wiper · Ring = pot end · Sleeve = ground</text>
+<g transform="translate(40,590)"><line x1="0" y1="0" x2="30" y2="0" stroke="#e8771e" stroke-width="4" marker-end="url(#aO)"/><text class="small" x="48" y="4">Out 2 → pedal (music + pilot tone)</text><line x1="0" y1="22" x2="30" y2="22" stroke="#1f78c1" stroke-width="4" marker-end="url(#aB)"/><text class="small" x="48" y="26">Pedal wiper → In 2 (position)</text><line x1="0" y1="44" x2="30" y2="44" stroke="#6b7280" stroke-width="4" marker-end="url(#aG)"/><text class="small" x="48" y="48">Instrument / amplifier</text></g>
+</svg>

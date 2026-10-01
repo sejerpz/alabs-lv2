@@ -1,0 +1,19 @@
+@prefix lv2:    <http://lv2plug.in/ns/lv2core#> .
+@prefix modgui: <http://moddevices.com/ns/modgui#> .
+
+<urn:alabs:expsense>
+    modgui:gui [
+        modgui:resourcesDirectory <modgui> ;
+        modgui:iconTemplate <modgui/icon-expsense.html> ;
+        modgui:stylesheet <modgui/stylesheet-expsense.css> ;
+        modgui:javascript <modgui/script-expsense.js> ;
+        modgui:screenshot <modgui/screenshot-expsense.png> ;
+        modgui:thumbnail <modgui/thumbnail-expsense.png> ;
+        modgui:brand "aLabs" ;
+        modgui:label "ExpSense" ;
+        modgui:monitoredOutputs
+            [ lv2:symbol "value" ] ,
+            [ lv2:symbol "tone_active" ] ,
+            [ lv2:symbol "status" ] ,
+            [ lv2:symbol "result" ] ;
+    ] .
