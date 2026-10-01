@@ -16,6 +16,18 @@
  *
  * A single guided calibration (heel -> toe -> heel) checks the pedal wiring,
  * measures the loop latency at toe and learns the pedal range and direction.
+ *
+ * Performance notes (target: MOD Dwarf, Cortex-A35, in-order, 64-bit NEON):
+ *  - the per-sample loop keeps all its state in locals (registers): nothing is
+ *    read back from the instance struct between samples;
+ *  - the two identical filter chains (output / sense) and the two lock-in
+ *    demodulators (sense / delayed output) run as 2-lane vectors (NEON d-regs);
+ *  - the oscillator is single precision, renormalised once per sub-block;
+ *  - exp() for the log volume law runs twice per sub-block (ends of a linear
+ *    ramp) instead of once per sample; log10() once per run();
+ *  - the two delay lines are interleaved (one cache line serves both reads);
+ *  - the latency-search correlations accumulate in float, in vectorisable
+ *    contiguous loops (the ring buffer of decimated samples is mirrored).
  */
 
 #include <math.h>
@@ -33,6 +45,17 @@
 #include <lv2/urid/urid.h>
 
 #define ES_URI "urn:alabs:expsense"
+
+/* small SIMD vectors (GCC/clang extension). v2f is a pair of floats: a NEON
+ * d-register on aarch64; elsewhere it is padded to 16 bytes so that it maps to a
+ * native SSE register instead of being lowered to scalar code (upper lanes unused). */
+#if defined(__aarch64__)
+typedef float v2f __attribute__((vector_size(8)));
+#else
+typedef float v2f __attribute__((vector_size(16)));
+#endif
+typedef float v4f __attribute__((vector_size(16), may_alias));
+typedef float v4fu __attribute__((vector_size(16), aligned(4), may_alias)); /* unaligned load */
 
 typedef enum {
 	P_IN_L = 0,
@@ -110,7 +133,7 @@ enum { LAT_IDLE = 0, LAT_COARSE, LAT_FINE, LAT_DONE };
 #define N_COARSE 512u /* decimated lags: cover DEC*N_COARSE = 2048 samples */
 #define FINE_HALF 8
 #define N_FINE (2 * FINE_HALF + 1)
-#define SUB 32u
+#define SUB 32u /* sub-block: power of two */
 
 #define COARSE_SEC 1.5
 #define FINE_SEC 0.75
@@ -156,10 +179,6 @@ typedef struct {
 } Biquad;
 
 typedef struct {
-	float a, x1, y1;
-} HP1;
-
-typedef struct {
 	/* ports */
 	const float* in_l;
 	const float* in_r;
@@ -178,30 +197,32 @@ typedef struct {
 		LV2_URID midi_Event, atom_Float, k_latency, k_lo, k_hi, k_tone_k;
 	} uris;
 
-	/* quadrature oscillator */
-	double ph_c, ph_s, rot_c, rot_s;
-	float cur_freq;
+	/* parameter-derived coefficients, recomputed only when the parameter changes */
+	float p_smooth, a_sm, dec_sub; /* dec_sub = (1 - a_sm)^SUB */
+	float p_tone_level, tone_amp;
+
+	/* quadrature oscillator: ph = {cos, sin}, rotated by rot_c / rot_s = {-sin w, sin w} */
+	v2f ph, rot_s;
+	float rot_c, cur_freq;
 	float tone_env, a_tone_env;
 	int tone_hold;
 	bool tone_want;
 
-	/* delay lines of the emitted signal: full band and 20 Hz..2 kHz */
-	float dl_y[DL_SIZE], dl_yl[DL_SIZE];
-	uint32_t w;
+	/* 20 Hz high-pass + 2 kHz low-pass, lane 0: output, lane 1: sense */
+	v2f hp_x1, hp_y1, bq_z1, bq_z2;
+	float hp_a, b0, b1, b2, a1, a2;
+	Biquad lp_noise;
 
-	Biquad lp_y, lp_s, lp_noise;
-	HP1 hp_y, hp_s;
-
-	/* lock-in */
+	/* lock-in: 3-pole one-pole chains, lane 0: sense, lane 1: delayed output */
 	float a_t;
-	float zs_re[3], zs_im[3], zx_re[3], zx_im[3];
+	v2f zre[3], zim[3];
 	float tone_k; /* loop response correction at 19 kHz vs low band */
 
 	/* least squares on the program */
 	float a_p, np, dp, ep;
 
 	/* estimate */
-	float raw, raw_sm, a_raw, value_tgt, value_sm, vol_g, a_vol, ref_db;
+	float raw, raw_sm, a_raw, value_tgt, value_sm, vol_g, a_vol, wsum;
 	bool have_raw, holding;
 
 	/* calibration */
@@ -212,10 +233,7 @@ typedef struct {
 	uint32_t cal_count, phase_t0, lat_count, lat_total, still, learn, back, leave;
 	bool reached_toe;
 	uint32_t coarse_len, fine_len;
-	float xdec[N_COARSE];
 	uint32_t xdec_w, dec_phase;
-	double cc[N_COARSE], cc_ex, cc_es;
-	double cf[N_FINE], cf_ex, cf_es;
 	int fine_base;
 	float a_cal, c_es, c_ex;    /* sense/output tone energies (latency-independent ratio) */
 	uint32_t gate;              /* samples left with the integration frozen */
@@ -241,6 +259,17 @@ typedef struct {
 	float midi_last;
 	int midi_last_ch, midi_last_cc, midi_last_14;
 	uint32_t midi_timer, midi_min_interval;
+
+	/* latency search. cc/cf are stored in reversed lag order (index m = last - k) so
+	 * that each update is a contiguous multiply-accumulate; xdec is mirrored */
+	double cc_ex, cc_es, cf_ex, cf_es;
+	float cf[N_FINE];
+	float xdec[2 * N_COARSE];
+	v4f cc[N_COARSE / 4];
+
+	/* delay line of the emitted signal: {full band, 20 Hz..2 kHz} */
+	uint32_t w;
+	v2f dl[DL_SIZE];
 } ExpSense;
 
 /* ------------------------------------------------------------------------- */
@@ -287,28 +316,6 @@ static inline float bq_run(Biquad* f, float x)
 	return y;
 }
 
-static void hp_init(HP1* h, double fs, double fc)
-{
-	h->a = (float)exp(-2.0 * M_PI * fc / fs);
-	h->x1 = h->y1 = 0.f;
-}
-
-static inline float hp_run(HP1* h, float x)
-{
-	const float y = h->a * (h->y1 + x - h->x1);
-	h->x1 = x;
-	h->y1 = y;
-	return y;
-}
-
-static inline float lp3(float* z, float a, float x)
-{
-	z[0] += a * (x - z[0]);
-	z[1] += a * (z[0] - z[1]);
-	z[2] += a * (z[1] - z[2]);
-	return z[2];
-}
-
 static inline float white(uint32_t* s)
 {
 	uint32_t x = *s;
@@ -319,11 +326,17 @@ static inline float white(uint32_t* s)
 	return (float)((int32_t)x) * (1.f / 2147483648.f);
 }
 
+static inline float vol_log(float v)
+{
+	return (expf(VOL_LOG_K * v) - 1.f) * VOL_LOG_NORM;
+}
+
 static void set_freq(ExpSense* s, float f)
 {
 	const double w = 2.0 * M_PI * f / s->fs;
-	s->rot_c = cos(w);
-	s->rot_s = sin(w);
+	const float sw = (float)sin(w);
+	s->rot_c = (float)cos(w);
+	s->rot_s = (v2f){ -sw, sw };
 	s->cur_freq = f;
 }
 
@@ -358,26 +371,37 @@ static void lat_start(ExpSense* s)
 	s->dec_phase = 0;
 }
 
+/* coarse correlation update: cc[m] += x[m] * sl over N_COARSE contiguous lags */
+static inline void coarse_acc(v4f* restrict cc, const float* restrict x, float sl)
+{
+	const v4f slv = { sl, sl, sl, sl };
+	for (uint32_t m = 0; m < N_COARSE / 4; ++m) {
+		cc[m] += *(const v4fu*)(x + 4 * m) * slv;
+	}
+}
+
 /* evaluate the correlations at the end of each search; called once per sub-block */
 static void lat_step(ExpSense* s, uint32_t ns)
 {
 	s->lat_count += ns;
 	if (s->lat_phase == LAT_COARSE && s->lat_count >= s->coarse_len) {
+		const float* cc = (const float*)s->cc;
 		uint32_t best = 0;
-		double bv = 0.0;
-		for (uint32_t k = 0; k < N_COARSE; ++k) {
-			const double v = fabs(s->cc[k]);
+		float bv = 0.f;
+		for (uint32_t m = 0; m < N_COARSE; ++m) {
+			const float v = fabsf(cc[m]);
 			if (v > bv) {
 				bv = v;
-				best = k;
+				best = m;
 			}
 		}
-		const double rho = bv * bv / (s->cc_ex * s->cc_es + 1e-30);
+		const double rho = (double)bv * bv / (s->cc_ex * s->cc_es + 1e-30);
 		if (rho < 0.2) {
 			lat_start(s); /* weak correlation: retry */
 			return;
 		}
-		s->fine_base = (int)(best * DEC) - FINE_HALF;
+		const uint32_t lag = N_COARSE - 1u - best; /* reversed storage */
+		s->fine_base = (int)(lag * DEC) - FINE_HALF;
 		if (s->fine_base < 0) {
 			s->fine_base = 0;
 		}
@@ -387,28 +411,29 @@ static void lat_step(ExpSense* s, uint32_t ns)
 		s->lat_phase = LAT_FINE;
 	} else if (s->lat_phase == LAT_FINE && s->lat_count >= s->fine_len) {
 		int best = 0;
-		double bv = 0.0;
-		for (int j = 0; j < N_FINE; ++j) {
-			const double v = fabs(s->cf[j]);
+		float bv = 0.f;
+		for (int m = 0; m < N_FINE; ++m) {
+			const float v = fabsf(s->cf[m]);
 			if (v > bv) {
 				bv = v;
-				best = j;
+				best = m;
 			}
 		}
-		const double rho = bv * bv / (s->cf_ex * s->cf_es + 1e-30);
+		const double rho = (double)bv * bv / (s->cf_ex * s->cf_es + 1e-30);
 		if (rho < 0.2) {
 			lat_start(s);
 			return;
 		}
+		/* cf[m] holds lag fine_base + (N_FINE - 1 - m): the previous lag is m + 1 */
 		double delta = 0.0;
 		if (best > 0 && best < N_FINE - 1) {
-			const double ym = fabs(s->cf[best - 1]), y0 = bv, yp = fabs(s->cf[best + 1]);
+			const double ym = fabsf(s->cf[best + 1]), y0 = bv, yp = fabsf(s->cf[best - 1]);
 			const double den = ym - 2.0 * y0 + yp;
 			if (den < 0.0) {
 				delta = clampf((float)(0.5 * (ym - yp) / den), -0.5f, 0.5f);
 			}
 		}
-		set_latency(s, (float)(s->fine_base + best + delta));
+		set_latency(s, (float)(s->fine_base + (N_FINE - 1 - best) + delta));
 		s->lat_valid = true;
 		reset_program_est(s);
 		s->lat_phase = LAT_DONE;
@@ -650,20 +675,25 @@ static LV2_Handle instantiate(const LV2_Descriptor* d, double rate, const char* 
 	s->uris.k_tone_k = map->map(map->handle, ES_URI "#tone_k");
 	lv2_atom_forge_init(&s->forge, map);
 
-	s->ph_c = 1.0;
-	s->ph_s = 0.0;
+	s->ph = (v2f){ 1.f, 0.f };
 	set_freq(s, 19000.f);
 	s->a_tone_env = onepole_coef(rate, 0.010);
 	s->a_t = (float)(1.0 - exp(-2.0 * M_PI * 200.0 / rate));
 	s->a_p = onepole_coef(rate, 0.003);
 	s->a_raw = onepole_coef(rate / SUB, 0.010);
 	s->a_vol = onepole_coef(rate, 0.002);
+	s->p_smooth = -1.f;     /* forces the coefficient computation on the first run() */
+	s->p_tone_level = 1.f;
 
-	bq_lowpass(&s->lp_y, rate, 2000.0, 0.7071);
-	bq_lowpass(&s->lp_s, rate, 2000.0, 0.7071);
+	Biquad lp;
+	bq_lowpass(&lp, rate, 2000.0, 0.7071);
+	s->b0 = lp.b0;
+	s->b1 = lp.b1;
+	s->b2 = lp.b2;
+	s->a1 = lp.a1;
+	s->a2 = lp.a2;
+	s->hp_a = (float)exp(-2.0 * M_PI * 20.0 / rate);
 	bq_lowpass(&s->lp_noise, rate, 2000.0, 0.7071);
-	hp_init(&s->hp_y, rate, 20.0);
-	hp_init(&s->hp_s, rate, 20.0);
 
 	s->coarse_len = (uint32_t)(COARSE_SEC * rate);
 	s->fine_len = (uint32_t)(FINE_SEC * rate);
@@ -710,12 +740,10 @@ static void connect_port(LV2_Handle h, uint32_t port, void* data)
 static void activate(LV2_Handle h)
 {
 	ExpSense* s = (ExpSense*)h;
-	memset(s->dl_y, 0, sizeof(s->dl_y));
-	memset(s->dl_yl, 0, sizeof(s->dl_yl));
-	memset(s->zs_re, 0, sizeof(s->zs_re));
-	memset(s->zs_im, 0, sizeof(s->zs_im));
-	memset(s->zx_re, 0, sizeof(s->zx_re));
-	memset(s->zx_im, 0, sizeof(s->zx_im));
+	memset(s->dl, 0, sizeof(s->dl));
+	memset(s->zre, 0, sizeof(s->zre));
+	memset(s->zim, 0, sizeof(s->zim));
+	s->hp_x1 = s->hp_y1 = s->bq_z1 = s->bq_z2 = (v2f){ 0.f, 0.f };
 	reset_program_est(s);
 	s->w = 0;
 }
@@ -728,6 +756,190 @@ static inline void midi_cc(ExpSense* s, uint32_t frame, int ch, int cc, int val)
 		if (lv2_atom_forge_atom(&s->forge, 3, s->uris.midi_Event)) {
 			lv2_atom_forge_write(&s->forge, msg, 3);
 		}
+	}
+}
+
+/* run()-invariant data of the per-sample loop */
+typedef struct {
+	const float* restrict in_l;
+	const float* restrict in_r;
+	const float* restrict sense;
+	float* restrict out_l;
+	float* restrict out_r;
+	float* restrict cv;
+	v2f hp_a, b0, b1, b2, a1, a2; /* 20 Hz high-pass, 2 kHz low-pass (both lanes) */
+	v2f a_t;                      /* lock-in */
+	v2f rot_s;
+	float rot_c, a_sm, a_vol, a_tone_env, a_p, tamp, noise_amp;
+	float kv, kl;  /* volume target: vt = kv*vt + kl*value_sm + dvt (branch-free) */
+	int vol_mode;  /* 0 off, 1 linear, 2 log */
+} Coef;
+
+/*
+ * One sub-block of the per-sample loop. lat_mode is a literal at each call site
+ * (0: normal, 1: coarse latency search, 2: fine search) and the function is always
+ * inlined, so the normal path carries neither the excitation noise nor the
+ * correlation state. All state lives in locals (registers) for the whole sub-block.
+ */
+static inline __attribute__((always_inline)) void sub_run(ExpSense* restrict s, const Coef* restrict k,
+                                                          uint32_t off, uint32_t end, const int lat_mode)
+{
+	const uint32_t ns = end - off;
+	const bool coarse = lat_mode == 1, fine = lat_mode == 2, measuring = lat_mode != 0;
+	const float te_tgt = s->tone_want ? 1.f : 0.f;
+	const float lf = s->lat_frac;
+	const uint32_t li = s->lat_int;
+	const float value_tgt = s->value_tgt;
+	v2f* restrict dl = s->dl;
+	const float* restrict in_l = k->in_l;
+	const float* restrict in_r = k->in_r;
+	const float* restrict sense = k->sense;
+	float* restrict out_l = k->out_l;
+	float* restrict out_r = k->out_r;
+	float* restrict cv = k->cv;
+	const v2f hp_a = k->hp_a, b0 = k->b0, b1 = k->b1, b2 = k->b2, a1 = k->a1, a2 = k->a2;
+	const v2f a_t = k->a_t, rot_s = k->rot_s;
+	const float rot_c = k->rot_c, a_sm = k->a_sm, a_vol = k->a_vol, a_tone_env = k->a_tone_env;
+	const float a_p = k->a_p, tamp = k->tamp, kv = k->kv, kl = k->kl;
+
+	v2f ph = s->ph;
+	float value_sm = s->value_sm, vol_g = s->vol_g, tone_env = s->tone_env;
+	v2f hx1 = s->hp_x1, hy1 = s->hp_y1, bz1 = s->bq_z1, bz2 = s->bq_z2;
+	v2f zr0 = s->zre[0], zr1 = s->zre[1], zr2 = s->zre[2];
+	v2f zi0 = s->zim[0], zi1 = s->zim[1], zi2 = s->zim[2];
+	float np = s->np, dp = s->dp, ep = s->ep;
+	float speak = s->speak;
+	uint32_t w = s->w;
+	/* excitation noise and decimation, latency search only */
+	Biquad lpn;
+	uint32_t rng = 0, dec_phase = 0, xdec_w = 0;
+	if (measuring) {
+		lpn = s->lp_noise;
+		rng = s->rng;
+		dec_phase = s->dec_phase;
+		xdec_w = s->xdec_w;
+	}
+
+	/* log volume law: the target is a linear ramp between its values at the two ends
+	 * of the sub-block (value_sm follows a known exponential meanwhile), then smoothed
+	 * per sample as before. Linear law: the target is value_sm itself. Off: 1. */
+	float vt = 1.f, dvt = 0.f;
+	if (k->vol_mode == 2) {
+		const float dec = (ns == SUB) ? s->dec_sub : powf(1.f - a_sm, (float)ns);
+		const float sm_end = value_tgt + (value_sm - value_tgt) * dec;
+		vt = vol_log(value_sm);
+		dvt = (vol_log(sm_end) - vt) / (float)ns;
+	}
+
+	for (uint32_t i = off; i < end; ++i) {
+		/* oscillator: {c, s} -> {c*rc - s*rs, s*rc + c*rs} */
+		const float oc = ph[0], os = ph[1];
+		ph = ph * rot_c + (v2f){ os, oc } * rot_s;
+
+		/* smoothed outputs */
+		value_sm += a_sm * (value_tgt - value_sm);
+		vt = kv * vt + (kl * value_sm + dvt);
+		vol_g += a_vol * (vt - vol_g);
+		tone_env += a_tone_env * (te_tgt - tone_env);
+
+		float noise = 0.f;
+		if (measuring) {
+			noise = bq_run(&lpn, white(&rng) * k->noise_amp);
+		}
+		/* R (Out 2) feeds the pedal: tone and excitation on R only, L gets volume only */
+		const float y = in_r[i] * vol_g + os * (tamp * tone_env) + noise;
+		out_l[i] = in_l[i] * vol_g;
+		out_r[i] = y;
+		if (cv) {
+			cv[i] = value_sm * 10.f;
+		}
+
+		/* 20 Hz..2 kHz band of {output, sense} */
+		const float sv = sense[i];
+		const v2f x2 = { y, sv };
+		const v2f hy = hp_a * (hy1 + x2 - hx1);
+		hx1 = x2;
+		hy1 = hy;
+		const v2f bl = b0 * hy + bz1;
+		bz1 = b1 * hy - a1 * bl + bz2;
+		bz2 = b2 * hy - a2 * bl;
+		const float yl = bl[0], sl = bl[1];
+
+		dl[w] = (v2f){ y, yl };
+		speak = fmaxf(speak, fabsf(sv)); /* only read while calibrating */
+
+		/* delayed output: full band (tone reference) and low band (fractional lag) */
+		const v2f d0 = dl[(w - li) & DL_MASK];
+		const float yd = d0[0];
+		const float d1 = dl[(w - li - 1u) & DL_MASK][1];
+		const float yld = d1 + lf * (d0[1] - d1);
+
+		/* tone lock-in: same demodulation on {sense, delayed output} */
+		const v2f sy = { sv, yd };
+		const v2f xr = sy * oc, xi = sy * -os;
+		zr0 += a_t * (xr - zr0);
+		zr1 += a_t * (zr0 - zr1);
+		zr2 += a_t * (zr1 - zr2);
+		zi0 += a_t * (xi - zi0);
+		zi1 += a_t * (zi0 - zi1);
+		zi2 += a_t * (zi1 - zi2);
+
+		/* least squares on the program */
+		np += a_p * (yld * sl - np);
+		dp += a_p * (yld * yld - dp);
+		ep += a_p * (sl * sl - ep);
+
+		/* correlations for the latency measurement */
+		if (coarse) {
+			if (++dec_phase == DEC) {
+				dec_phase = 0;
+				xdec_w = (xdec_w + 1u) & (N_COARSE - 1u);
+				s->xdec[xdec_w] = s->xdec[xdec_w + N_COARSE] = yl;
+				/* cc[m] <- lag N_COARSE-1-m, i.e. xdec[(xdec_w + 1 + m) mod N] */
+				coarse_acc(s->cc, s->xdec + xdec_w + 1u, sl);
+				s->cc_ex += (double)(yl * yl);
+				s->cc_es += (double)(sl * sl);
+			}
+		} else if (fine) {
+			/* cf[m] <- lag fine_base + N_FINE-1-m */
+			const uint32_t b = w - (uint32_t)s->fine_base - (N_FINE - 1u);
+			for (uint32_t m = 0; m < N_FINE; ++m) {
+				s->cf[m] += dl[(b + m) & DL_MASK][1] * sl;
+			}
+			s->cf_ex += (double)(yl * yl);
+			s->cf_es += (double)(sl * sl);
+		}
+
+		w = (w + 1u) & DL_MASK;
+	}
+
+	/* phasor renormalisation (one Newton step: |ph| is within 1e-5 of 1) */
+	ph *= 1.5f - 0.5f * (ph[0] * ph[0] + ph[1] * ph[1]);
+
+	s->ph = ph;
+	s->value_sm = value_sm;
+	s->vol_g = vol_g;
+	s->tone_env = tone_env;
+	s->hp_x1 = hx1;
+	s->hp_y1 = hy1;
+	s->bq_z1 = bz1;
+	s->bq_z2 = bz2;
+	s->zre[0] = zr0;
+	s->zre[1] = zr1;
+	s->zre[2] = zr2;
+	s->zim[0] = zi0;
+	s->zim[1] = zi1;
+	s->zim[2] = zi2;
+	s->np = np;
+	s->dp = dp;
+	s->ep = ep;
+	s->speak = speak;
+	s->w = w;
+	if (measuring) {
+		s->lp_noise = lpn;
+		s->rng = rng;
+		s->dec_phase = dec_phase;
+		s->xdec_w = xdec_w;
 	}
 }
 
@@ -751,14 +963,29 @@ static void run(LV2_Handle h, uint32_t n)
 		__atomic_store_n(&s->restore_pending, 0, __ATOMIC_RELEASE);
 	}
 
-	/* parameters */
+	/* parameters (the transcendental coefficients only when their parameter changes) */
 	const int mode = clampi((int)lrintf(*s->c[P_MODE]), 0, 2);
 	const float freq = clampf(*s->c[P_TONE_FREQ], 1000.f, (float)(0.45 * s->fs));
 	if (freq != s->cur_freq) {
 		set_freq(s, freq);
 	}
-	const float tone_amp = db2lin(clampf(*s->c[P_TONE_LEVEL], -80.f, -20.f));
-	const float a_sm = onepole_coef(s->fs, 0.001 * clampf(*s->c[P_SMOOTH], 0.1f, 200.f));
+	const float tone_level = clampf(*s->c[P_TONE_LEVEL], -80.f, -20.f);
+	if (tone_level != s->p_tone_level) {
+		s->p_tone_level = tone_level;
+		s->tone_amp = db2lin(tone_level);
+	}
+	const float tone_amp = s->tone_amp;
+	const float smooth = clampf(*s->c[P_SMOOTH], 0.1f, 200.f);
+	if (smooth != s->p_smooth) {
+		s->p_smooth = smooth;
+		s->a_sm = onepole_coef(s->fs, 0.001 * smooth);
+		float d = 1.f - s->a_sm;
+		for (uint32_t k = SUB; k > 1u; k >>= 1) {
+			d *= d;
+		}
+		s->dec_sub = d;
+	}
+	const float a_sm = s->a_sm;
 	const float curve = clampf(*s->c[P_CURVE], 0.25f, 4.f);
 	const bool invert = *s->c[P_INVERT] > 0.5f;
 	const bool vol_on = *s->c[P_VOL_ON] > 0.5f;
@@ -789,96 +1016,46 @@ static void run(LV2_Handle h, uint32_t n)
 		midi_ok = lv2_atom_forge_sequence_head(&s->forge, &seq_frame, 0) != 0;
 	}
 
+	Coef k;
+	k.in_l = s->in_l;
+	k.in_r = s->in_r;
+	k.sense = s->sense;
+	k.out_l = s->out_l;
+	k.out_r = s->out_r;
+	k.cv = s->cv;
+	k.hp_a = (v2f){ s->hp_a, s->hp_a };
+	k.b0 = (v2f){ s->b0, s->b0 };
+	k.b1 = (v2f){ s->b1, s->b1 };
+	k.b2 = (v2f){ s->b2, s->b2 };
+	k.a1 = (v2f){ s->a1, s->a1 };
+	k.a2 = (v2f){ s->a2, s->a2 };
+	k.a_t = (v2f){ s->a_t, s->a_t };
+	k.a_p = s->a_p;
+	k.rot_s = s->rot_s;
+	k.rot_c = s->rot_c;
+	k.a_sm = a_sm;
+	k.a_vol = s->a_vol;
+	k.a_tone_env = s->a_tone_env;
+	k.tamp = tone_amp_eff;
+	k.noise_amp = s->noise_amp;
+	k.vol_mode = vol_on ? (vol_linear ? 1 : 2) : 0;
+	k.kv = vol_on && vol_linear ? 0.f : 1.f;
+	k.kl = vol_on && vol_linear ? 1.f : 0.f;
+
 	for (uint32_t off = 0; off < n; off += SUB) {
 		const uint32_t end = (off + SUB < n) ? off + SUB : n;
-		const bool measuring = s->lat_phase == LAT_COARSE || s->lat_phase == LAT_FINE;
-		const bool cal_on = calibrating(s);
-		const float te_tgt = s->tone_want ? 1.f : 0.f;
-		const float lf = s->lat_frac;
-		const uint32_t li = s->lat_int;
-
-		for (uint32_t i = off; i < end; ++i) {
-			/* oscillator */
-			const double c0 = s->ph_c, s0 = s->ph_s;
-			s->ph_c = c0 * s->rot_c - s0 * s->rot_s;
-			s->ph_s = s0 * s->rot_c + c0 * s->rot_s;
-			const float oc = (float)c0, os = (float)s0;
-
-			/* smoothed outputs */
-			s->value_sm += a_sm * (s->value_tgt - s->value_sm);
-			float vt = 1.f;
-			if (vol_on) {
-				vt = vol_linear ? s->value_sm : (expf(VOL_LOG_K * s->value_sm) - 1.f) * VOL_LOG_NORM;
-			}
-			s->vol_g += s->a_vol * (vt - s->vol_g);
-			s->tone_env += s->a_tone_env * (te_tgt - s->tone_env);
-
-			float noise = 0.f;
-			if (measuring) {
-				noise = bq_run(&s->lp_noise, white(&s->rng) * s->noise_amp);
-			}
-			/* R (Out 2) feeds the pedal: tone and excitation on R only, L gets volume only */
-			const float y = s->in_r[i] * s->vol_g + os * tone_amp_eff * s->tone_env + noise;
-			s->out_l[i] = s->in_l[i] * s->vol_g;
-			s->out_r[i] = y;
-			if (s->cv) {
-				s->cv[i] = s->value_sm * 10.f;
-			}
-
-			/* reference paths */
-			const float yl = bq_run(&s->lp_y, hp_run(&s->hp_y, y));
-			s->dl_y[s->w] = y;
-			s->dl_yl[s->w] = yl;
-
-			const float sv = s->sense[i];
-			if (cal_on && fabsf(sv) > s->speak) {
-				s->speak = fabsf(sv);
-			}
-			const float sl = bq_run(&s->lp_s, hp_run(&s->hp_s, sv));
-
-			/* tone lock-in: same demodulation on sense and on the delayed output */
-			const float yd = s->dl_y[(s->w - li) & DL_MASK];
-			lp3(s->zs_re, s->a_t, sv * oc);
-			lp3(s->zs_im, s->a_t, -sv * os);
-			lp3(s->zx_re, s->a_t, yd * oc);
-			lp3(s->zx_im, s->a_t, -yd * os);
-
-			/* least squares on the program */
-			const float yld = (1.f - lf) * s->dl_yl[(s->w - li) & DL_MASK]
-			                  + lf * s->dl_yl[(s->w - li - 1u) & DL_MASK];
-			s->np += s->a_p * (yld * sl - s->np);
-			s->dp += s->a_p * (yld * yld - s->dp);
-			s->ep += s->a_p * (sl * sl - s->ep);
-
-			/* correlations for the latency measurement */
-			if (s->lat_phase == LAT_COARSE) {
-				if (++s->dec_phase == DEC) {
-					s->dec_phase = 0;
-					s->xdec_w = (s->xdec_w + 1u) & (N_COARSE - 1u);
-					s->xdec[s->xdec_w] = yl;
-					for (uint32_t k = 0; k < N_COARSE; ++k) {
-						s->cc[k] += (double)(s->xdec[(s->xdec_w - k) & (N_COARSE - 1u)] * sl);
-					}
-					s->cc_ex += (double)(yl * yl);
-					s->cc_es += (double)(sl * sl);
-				}
-			} else if (s->lat_phase == LAT_FINE) {
-				for (int j = 0; j < N_FINE; ++j) {
-					const uint32_t lag = (uint32_t)(s->fine_base + j);
-					s->cf[j] += (double)(s->dl_yl[(s->w - lag) & DL_MASK] * sl);
-				}
-				s->cf_ex += (double)(yl * yl);
-				s->cf_es += (double)(sl * sl);
-			}
-
-			s->w = (s->w + 1u) & DL_MASK;
-		}
-
 		const uint32_t ns = end - off;
 
+		switch (s->lat_phase) {
+		case LAT_COARSE: sub_run(s, &k, off, end, 1); break;
+		case LAT_FINE: sub_run(s, &k, off, end, 2); break;
+		default: sub_run(s, &k, off, end, 0); break;
+		}
+
 		/* ---- estimate at the end of each sub-block ---- */
-		const float ms = hypotf(s->zs_re[2], s->zs_im[2]);
-		const float mx = hypotf(s->zx_re[2], s->zx_im[2]);
+		const v2f zr2 = s->zre[2], zi2 = s->zim[2];
+		const float ms = sqrtf(zr2[0] * zr2[0] + zi2[0] * zi2[0]);
+		const float mx = sqrtf(zr2[1] * zr2[1] + zi2[1] * zi2[1]);
 		const float et = mx * mx;
 		float gt = 0.f, wt = 0.f;
 		if (et > 1e-12f) {
@@ -889,24 +1066,25 @@ static void run(LV2_Handle h, uint32_t n)
 			/* lock-in magnitude of the tone alone: A/2 */
 			cal_step(s, ns, ms, mx, 0.5f * tone_amp_eff * s->tone_env);
 		}
+		const float np = s->np, dp = s->dp, ep = s->ep;
 		float gp = 0.f, wp = 0.f, rho = 0.f;
-		if (s->dp > 1e-10f) {
-			rho = s->np * s->np / (s->dp * s->ep + 1e-20f);
-			gp = fabsf(s->np) / s->dp;
+		if (dp > 1e-10f) {
+			rho = np * np / (dp * ep + 1e-20f);
+			gp = fabsf(np) / dp;
 			if (s->lat_valid) {
-				wp = s->dp * clampf((rho - 0.80f) / 0.15f, 0.f, 1.f);
+				wp = dp * clampf((rho - 0.80f) / 0.15f, 0.f, 1.f);
 			}
 		}
 
 		/* learn the tone/program correction when both are reliable */
-		if (s->lat_valid && rho > 0.97f && s->dp > 1e-6f && et > 1e-9f && ms > 1e-9f) {
+		if (s->lat_valid && rho > 0.97f && dp > 1e-6f && et > 1e-9f && ms > 1e-9f) {
 			const float ratio = gp * mx / ms;
 			const float rate = s->lat_phase == LAT_DONE ? TONE_K_RATE_CAL : TONE_K_RATE;
 			s->tone_k += rate * (clampf(ratio, 0.25f, 4.f) - s->tone_k);
 		}
 
 		const float wsum = wt + wp;
-		s->ref_db = 10.f * log10f(wsum + 1e-30f);
+		s->wsum = wsum;
 		bool hold = true;
 		if (wsum > W_MIN) {
 			s->raw = (wt * gt + wp * gp) / wsum;
@@ -941,8 +1119,8 @@ static void run(LV2_Handle h, uint32_t n)
 		} else if (mode == MODE_PROGRAM) {
 			need = false;
 		} else {
-			const bool weak = !s->lat_valid || s->dp < THR_ON || rho < 0.85f;
-			const bool strong = s->lat_valid && s->dp > THR_OFF && rho > 0.92f;
+			const bool weak = !s->lat_valid || dp < THR_ON || rho < 0.85f;
+			const bool strong = s->lat_valid && dp > THR_OFF && rho > 0.92f;
 			if (weak) {
 				s->tone_hold = (int)(TONE_HOLD_SEC * s->fs);
 			} else if (strong) {
@@ -954,7 +1132,6 @@ static void run(LV2_Handle h, uint32_t n)
 			need = s->tone_hold > 0;
 		}
 		s->tone_want = need;
-
 
 		/* MIDI */
 		s->midi_timer += ns;
@@ -981,11 +1158,6 @@ static void run(LV2_Handle h, uint32_t n)
 		}
 	}
 
-	/* phasor renormalization */
-	const double norm = 1.0 / sqrt(s->ph_c * s->ph_c + s->ph_s * s->ph_s);
-	s->ph_c *= norm;
-	s->ph_s *= norm;
-
 	if (midi_ok) {
 		lv2_atom_forge_pop(&s->forge, &seq_frame);
 	}
@@ -1006,7 +1178,7 @@ static void run(LV2_Handle h, uint32_t n)
 	if (s->o[P_LATENCY]) *s->o[P_LATENCY] = s->lat_valid ? s->latency : 0.f;
 	if (s->o[P_CAL_LO]) *s->o[P_CAL_LO] = s->lo;
 	if (s->o[P_CAL_HI]) *s->o[P_CAL_HI] = s->hi;
-	if (s->o[P_REF_DB]) *s->o[P_REF_DB] = clampf(s->ref_db, -120.f, 0.f);
+	if (s->o[P_REF_DB]) *s->o[P_REF_DB] = clampf(10.f * log10f(s->wsum + 1e-30f), -120.f, 0.f);
 	if (s->o[P_VOL_GAIN]) *s->o[P_VOL_GAIN] = s->vol_g;
 	if (s->o[P_RESULT]) *s->o[P_RESULT] = (float)s->result;
 }

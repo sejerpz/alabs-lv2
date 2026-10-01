@@ -10,9 +10,17 @@
 
 CC         ?= gcc
 LV2_CFLAGS ?= $(shell pkg-config --cflags lv2 2>/dev/null)
-CFLAGS     ?= -O2 -ffast-math
-CFLAGS     += -std=c99 -D_DEFAULT_SOURCE -fPIC -Wall -Wextra -fvisibility=hidden $(LV2_CFLAGS)
-LDFLAGS    += -shared -lm
+
+# Target CPU: the MOD Dwarf is a Cortex-A35 (in-order, 64-bit NEON). Scheduling for
+# it matters; ARCHFLAGS is left empty for native/host builds and can be overridden.
+TARGET     := $(shell $(CC) -dumpmachine 2>/dev/null)
+ifneq (,$(findstring aarch64,$(TARGET)))
+ARCHFLAGS  ?= -mcpu=cortex-a35
+endif
+# -ffp-contract=fast: -std=c99 would otherwise disable fused multiply-add
+CFLAGS     ?= -O3 -ffast-math
+CFLAGS     += -std=c99 -ffp-contract=fast -fomit-frame-pointer -fno-stack-protector               -fno-asynchronous-unwind-tables -ffunction-sections -fdata-sections               -D_DEFAULT_SOURCE -fPIC -Wall -Wextra -fvisibility=hidden $(ARCHFLAGS) $(LV2_CFLAGS)
+LDFLAGS    += -shared -lm -Wl,-O1,--as-needed,--gc-sections,--strip-all
 
 UI     ?= classic
 NAME    = expsense.lv2
@@ -43,7 +51,7 @@ gui:
 	@echo "modgui theme: $(UI)"
 
 test/sim: test/sim.c
-	$(CC) -O2 -std=c99 -D_DEFAULT_SOURCE -Wall $(LV2_CFLAGS) -o $@ $< -ldl -lm
+	$(CC) -O2 -std=c99 -D_DEFAULT_SOURCE -Wall $(ARCHFLAGS) $(LV2_CFLAGS) -o $@ $< -ldl -lm
 
 test: all test/sim
 	./test/sim $(BUNDLE)/expsense.so test/out.csv

@@ -279,6 +279,22 @@ make CC=aarch64-linux-gnu-gcc LV2_CFLAGS=... UI=tin publish             # tin th
 make CC=aarch64-linux-gnu-gcc LV2_CFLAGS=... publish DWARF=192.168.52.1 # other address
 ```
 
+The Makefile builds with `-O3 -ffast-math -ffp-contract=fast` (in `-std=c99` mode GCC would otherwise not emit fused multiply-adds) and, when `CC` targets aarch64, adds `-mcpu=cortex-a35` (the Dwarf's in-order core: instruction scheduling for it matters). The shared object is stripped and unused sections are dropped; override `CFLAGS`, `ARCHFLAGS` or `LDFLAGS` to change this.
+
+### Performance
+
+The target is the MOD Dwarf (Cortex-A35: in-order, 64-bit NEON). Per sample, the normal path of `run()` executes ~98 instructions (2 branches, no library calls) against ~190–220 (with an `expf()` call) in the first version. What was done, in `src/expsense.c`:
+
+- the per-sample loop keeps all its state in locals (registers) for a whole 32-sample sub-block; nothing is reloaded from the instance between samples;
+- the two identical filter chains (output / sense) and the two lock-in demodulators (sense / delayed output) run as 2-lane vectors (NEON d-registers; GCC vector extensions, so the x86 host build is vectorised too);
+- the quadrature oscillator is single precision, renormalised once per sub-block;
+- `exp()` for the log volume law runs twice per sub-block (ends of a linear ramp) instead of once per sample, `log10()` once per `run()`, and the parameter-derived coefficients are recomputed only when the parameter changes;
+- the two delay lines are interleaved so that one cache line serves both reads;
+- the inner loop is compiled in three specialised copies (normal, coarse and fine latency search), so the normal path carries neither the excitation noise nor the correlation state;
+- the latency-search correlations accumulate in float, in contiguous vectorisable loops (the decimated ring buffer is mirrored, the lag arrays are stored reversed).
+
+Memory: one instance is ~40 KB, of which 32 KB are the two 4096-sample delay lines (the search covers lags up to 2048 samples). The stripped aarch64 binary is ~22 KB.
+
 `publish` checks that the binary is an aarch64 build, packs `build/expsense.lv2` as base64 tar.gz, and posts it to mod-ui's `/sdk/install`. It fails with an error message if mod-ui refuses the install, which typically happens when ExpSense is still in the current pedalboard. The theme is rebuilt on every `make`, so switching `UI=` only needs a new `publish`; reload the web UI to see it.
 
 ## Simulation (test/sim.c)
@@ -293,7 +309,7 @@ The simulated loop has: 317.37-sample latency, windowed-sinc fractional delay, F
 | volume heel-down | 0 | 0 | 100% |
 | volume swell (log law) | 0.007 | 0.012 | 78% |
 
-Measured latency 317.52 (expected 317.37 + 0.15 from the FIR). The calibration ends by itself ~0.3 s after the pedal is back at heel. CPU ~100 ns/sample on x86.
+Measured latency 317.52 (expected 317.37 + 0.15 from the FIR). The calibration ends by itself ~0.3 s after the pedal is back at heel. CPU ~40 ns/sample on an x86 host (was ~55 before the optimisation pass; the figure printed by `make test` is for the host, not the Dwarf).
 
 The calibration is then run against ten cases, all handled correctly: standard wiring, heel reading high (direction learned: heel reads 0 afterwards), Tip/Ring swapped (high-impedance input: detected as swap; low-impedance input as on the Dwarf: calibrated with a wiring warning), no signal, In 2 clipping, In 2 level low, pedal never moved, toe not held, and a second press (abort). The whole suite also passes with 20 different random guitar signals. `make test` returns a non-zero exit code if any case fails.
 
