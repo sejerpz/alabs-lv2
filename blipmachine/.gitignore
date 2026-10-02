@@ -1,0 +1,7 @@
+/dpf/
+/bin/
+/build/
+/dist/
+/plugins/*/build/
+*.o
+*.d

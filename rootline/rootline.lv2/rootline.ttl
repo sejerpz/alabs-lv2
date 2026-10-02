@@ -1,0 +1,237 @@
+@prefix doap:  <http://usefulinc.com/ns/doap#> .
+@prefix foaf:  <http://xmlns.com/foaf/0.1/> .
+@prefix lv2:   <http://lv2plug.in/ns/lv2core#> .
+@prefix mod:   <http://moddevices.com/ns/mod#> .
+@prefix pprop: <http://lv2plug.in/ns/ext/port-props#> .
+@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix units: <http://lv2plug.in/ns/extensions/units#> .
+
+<urn:alabs:rootline>
+    a lv2:Plugin, lv2:PitchPlugin ;
+    doap:name "Rootline" ;
+    doap:license <http://opensource.org/licenses/MIT> ;
+    doap:maintainer [ foaf:name "Andrea Del Signore" ] ;
+    lv2:minorVersion 0 ;
+    lv2:microVersion 1 ;
+    mod:brand "aLabs" ;
+    mod:label "Rootline" ;
+    rdfs:comment """Rootline - a bass companion for guitar. Sub-octave bass for acoustic or electric guitar (standard, drop D, drop C, B).
+Tracks the LOWEST note (lowest string..A3) and plays it one octave down with two timbres:
+a clean synth bass (tone = added harmonics) and an OC-2 style octaver (grit = square hardness).
+In 1 = tracking input (magnetic pickup recommended). In 2 = dry input (e.g. piezo) when Input mode = Dual.
+Tuning: notes below the lowest open string are ignored (removes phantom notes from thumps and rumble).
+Instrument: Electric uses faster decisions and a more tolerant level floor.
+Mode: Classic = bass on the lowest note; Smart mono = bass off during fast single-note lines;
+Dual = the tracked low note is removed from the guitar (comb notch) so the bass takes its place.
+Unison = bass always on, notes up to E6, overrides Mode. Bass out = bass only (synth + octaver).
+Place it BEFORE any distortion or compression.
+Low latency ON: sub audible after ~6-14 ms, full level after ~10-18 ms. OFF: ~20-40 ms, cleaner onsets and fewer wrong notes on dense chords.""" ;
+    lv2:optionalFeature lv2:hardRTCapable ;
+
+    lv2:port [
+        a lv2:AudioPort, lv2:InputPort ;
+        lv2:index 0 ;
+        lv2:symbol "in_track" ;
+        lv2:name "In 1 (tracking)"
+    ] , [
+        a lv2:AudioPort, lv2:InputPort ;
+        lv2:index 1 ;
+        lv2:symbol "in_dry" ;
+        lv2:name "In 2 (dry)"
+    ] , [
+        a lv2:AudioPort, lv2:OutputPort ;
+        lv2:index 2 ;
+        lv2:symbol "out" ;
+        lv2:name "Out"
+    ] , [
+        a lv2:ControlPort, lv2:InputPort ;
+        lv2:index 3 ;
+        lv2:symbol "input_mode" ;
+        lv2:name "Input mode" ;
+        lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 1 ;
+        lv2:portProperty lv2:integer, lv2:enumeration ;
+        lv2:scalePoint [ rdfs:label "Mono (In 1 = dry)" ; rdf:value 0 ] ,
+                       [ rdfs:label "Dual (In 2 = dry)" ; rdf:value 1 ]
+    ] , [
+        a lv2:ControlPort, lv2:InputPort ;
+        lv2:index 4 ;
+        lv2:symbol "low_latency" ;
+        lv2:name "Low latency" ;
+        lv2:default 1 ; lv2:minimum 0 ; lv2:maximum 1 ;
+        lv2:portProperty lv2:toggled, lv2:integer
+    ] , [
+        a lv2:ControlPort, lv2:InputPort ;
+        lv2:index 5 ;
+        lv2:symbol "cutoff_note" ;
+        lv2:name "Track up to" ;
+        lv2:default 50 ; lv2:minimum 36 ; lv2:maximum 57 ;
+        lv2:portProperty lv2:integer, lv2:enumeration ;
+        units:unit units:midiNote ;
+        lv2:scalePoint
+            [ rdfs:label "C2" ; rdf:value 36 ],
+            [ rdfs:label "C#2" ; rdf:value 37 ],
+            [ rdfs:label "D2" ; rdf:value 38 ],
+            [ rdfs:label "D#2" ; rdf:value 39 ],
+            [ rdfs:label "E2" ; rdf:value 40 ],
+            [ rdfs:label "F2" ; rdf:value 41 ],
+            [ rdfs:label "F#2" ; rdf:value 42 ],
+            [ rdfs:label "G2" ; rdf:value 43 ],
+            [ rdfs:label "G#2" ; rdf:value 44 ],
+            [ rdfs:label "A2" ; rdf:value 45 ],
+            [ rdfs:label "A#2" ; rdf:value 46 ],
+            [ rdfs:label "B2" ; rdf:value 47 ],
+            [ rdfs:label "C3" ; rdf:value 48 ],
+            [ rdfs:label "C#3" ; rdf:value 49 ],
+            [ rdfs:label "D3" ; rdf:value 50 ],
+            [ rdfs:label "D#3" ; rdf:value 51 ],
+            [ rdfs:label "E3" ; rdf:value 52 ],
+            [ rdfs:label "F3" ; rdf:value 53 ],
+            [ rdfs:label "F#3" ; rdf:value 54 ],
+            [ rdfs:label "G3" ; rdf:value 55 ],
+            [ rdfs:label "G#3" ; rdf:value 56 ],
+            [ rdfs:label "A3" ; rdf:value 57 ]
+    ] , [
+        a lv2:ControlPort, lv2:InputPort ;
+        lv2:index 6 ;
+        lv2:symbol "threshold" ;
+        lv2:name "Threshold" ;
+        lv2:default -50 ; lv2:minimum -70 ; lv2:maximum -20 ;
+        units:unit units:db
+    ] , [
+        a lv2:ControlPort, lv2:InputPort ;
+        lv2:index 7 ;
+        lv2:symbol "synth_level" ;
+        lv2:name "Synth level" ;
+        lv2:default 0 ; lv2:minimum -60 ; lv2:maximum 12 ;
+        units:unit units:db
+    ] , [
+        a lv2:ControlPort, lv2:InputPort ;
+        lv2:index 8 ;
+        lv2:symbol "synth_tone" ;
+        lv2:name "Synth tone" ;
+        lv2:default 0.3 ; lv2:minimum 0 ; lv2:maximum 1
+    ] , [
+        a lv2:ControlPort, lv2:InputPort ;
+        lv2:index 9 ;
+        lv2:symbol "oct_level" ;
+        lv2:name "Octaver level" ;
+        lv2:default -60 ; lv2:minimum -60 ; lv2:maximum 12 ;
+        units:unit units:db
+    ] , [
+        a lv2:ControlPort, lv2:InputPort ;
+        lv2:index 10 ;
+        lv2:symbol "oct_grit" ;
+        lv2:name "Octaver grit" ;
+        lv2:default 0.5 ; lv2:minimum 0 ; lv2:maximum 1
+    ] , [
+        a lv2:ControlPort, lv2:InputPort ;
+        lv2:index 11 ;
+        lv2:symbol "attack" ;
+        lv2:name "Attack" ;
+        lv2:default 3 ; lv2:minimum 0.5 ; lv2:maximum 50 ;
+        lv2:portProperty pprop:logarithmic ;
+        units:unit units:ms
+    ] , [
+        a lv2:ControlPort, lv2:InputPort ;
+        lv2:index 12 ;
+        lv2:symbol "release" ;
+        lv2:name "Release" ;
+        lv2:default 150 ; lv2:minimum 20 ; lv2:maximum 1000 ;
+        lv2:portProperty pprop:logarithmic ;
+        units:unit units:ms
+    ] , [
+        a lv2:ControlPort, lv2:InputPort ;
+        lv2:index 13 ;
+        lv2:symbol "dry_level" ;
+        lv2:name "Dry level" ;
+        lv2:default 0 ; lv2:minimum -60 ; lv2:maximum 12 ;
+        units:unit units:db
+    ] , [
+        a lv2:ControlPort, lv2:InputPort ;
+        lv2:index 14 ;
+        lv2:symbol "instrument" ;
+        lv2:name "Instrument" ;
+        lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 1 ;
+        lv2:portProperty lv2:integer, lv2:enumeration ;
+        lv2:scalePoint [ rdfs:label "Acoustic" ; rdf:value 0 ] ,
+                       [ rdfs:label "Electric" ; rdf:value 1 ]
+    ] , [
+        a lv2:ControlPort, lv2:InputPort ;
+        lv2:index 15 ;
+        lv2:symbol "tuning" ;
+        lv2:name "Tuning" ;
+        lv2:default 2 ; lv2:minimum 0 ; lv2:maximum 3 ;
+        lv2:portProperty lv2:integer, lv2:enumeration ;
+        lv2:scalePoint [ rdfs:label "Standard E" ; rdf:value 0 ] ,
+                       [ rdfs:label "Drop D" ; rdf:value 1 ] ,
+                       [ rdfs:label "Drop C" ; rdf:value 2 ] ,
+                       [ rdfs:label "B (7-string / baritone)" ; rdf:value 3 ]
+    ] , [
+        a lv2:AudioPort, lv2:OutputPort ;
+        lv2:index 16 ;
+        lv2:symbol "bass_out" ;
+        lv2:name "Bass out"
+    ] , [
+        a lv2:ControlPort, lv2:InputPort ;
+        lv2:index 17 ;
+        lv2:symbol "mode" ;
+        lv2:name "Mode" ;
+        lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 2 ;
+        lv2:portProperty lv2:integer, lv2:enumeration ;
+        lv2:scalePoint [ rdfs:label "Classic" ; rdf:value 0 ] ,
+                       [ rdfs:label "Smart mono" ; rdf:value 1 ] ,
+                       [ rdfs:label "Dual" ; rdf:value 2 ]
+    ] , [
+        a lv2:ControlPort, lv2:InputPort ;
+        lv2:index 18 ;
+        lv2:symbol "melody_sens" ;
+        lv2:name "Melody sensitivity" ;
+        lv2:default 7 ; lv2:minimum 3 ; lv2:maximum 16 ;
+        units:unit [ a units:Unit ; rdfs:label "notes/s" ; units:symbol "n/s" ; units:render "%.1f n/s" ]
+    ] , [
+        a lv2:ControlPort, lv2:InputPort ;
+        lv2:index 19 ;
+        lv2:symbol "unison" ;
+        lv2:name "Unison" ;
+        lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 1 ;
+        lv2:portProperty lv2:toggled, lv2:integer
+    ] , [
+        a lv2:ControlPort, lv2:InputPort ;
+        lv2:index 20 ;
+        lv2:symbol "unison_oct" ;
+        lv2:name "Unison octave" ;
+        lv2:default 2 ; lv2:minimum 0 ; lv2:maximum 2 ;
+        lv2:portProperty lv2:integer, lv2:enumeration ;
+        lv2:scalePoint [ rdfs:label "-1 octave" ; rdf:value 0 ] ,
+                       [ rdfs:label "-2 octaves" ; rdf:value 1 ] ,
+                       [ rdfs:label "Auto (fold)" ; rdf:value 2 ]
+    ] , [
+        a lv2:ControlPort, lv2:InputPort ;
+        lv2:index 21 ;
+        lv2:symbol "main_out" ;
+        lv2:name "Main out" ;
+        lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 1 ;
+        lv2:portProperty lv2:integer, lv2:enumeration ;
+        lv2:scalePoint [ rdfs:label "Guitar + bass" ; rdf:value 0 ] ,
+                       [ rdfs:label "Guitar only" ; rdf:value 1 ]
+    ] , [
+        a lv2:ControlPort, lv2:InputPort ;
+        lv2:index 22 ;
+        lv2:symbol "bass_out_level" ;
+        lv2:name "Bass out level" ;
+        lv2:default 0 ; lv2:minimum -60 ; lv2:maximum 12 ;
+        units:unit units:db
+    ] , [
+        a lv2:ControlPort, lv2:OutputPort ;
+        lv2:index 23 ;
+        lv2:symbol "context" ;
+        lv2:name "Context" ;
+        lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 4 ;
+        lv2:portProperty lv2:integer, lv2:enumeration ;
+        lv2:scalePoint [ rdfs:label "Silence" ; rdf:value 0 ] ,
+                       [ rdfs:label "Single notes" ; rdf:value 1 ] ,
+                       [ rdfs:label "Melody" ; rdf:value 2 ] ,
+                       [ rdfs:label "Chords" ; rdf:value 3 ] ,
+                       [ rdfs:label "Unison" ; rdf:value 4 ]
+    ] .
